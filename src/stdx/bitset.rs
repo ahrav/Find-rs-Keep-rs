@@ -78,12 +78,12 @@ impl DynamicBitSet {
 
     /// Returns a mutable slice of backing words.
     ///
-    /// # Safety
+    /// # Warning
     ///
     /// Callers must ensure that any padding bits in the last word (indices `>= bit_length`)
-    /// remain zero.
+    /// remain zero. Failure to do so may cause `PartialEq` to behave incorrectly.
     #[inline]
-    pub unsafe fn words_mut(&mut self) -> &mut [u64] {
+    pub fn words_mut(&mut self) -> &mut [u64] {
         &mut self.words
     }
 
