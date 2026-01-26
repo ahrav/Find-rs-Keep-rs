@@ -1,0 +1,305 @@
+//! Bitset implementation: heap-allocated [`DynamicBitSet`] for runtime-determined sizes.
+//!
+//! Stores bits in `u64` words and guarantees that padding bits (indices beyond the
+//! logical capacity) remain zero.
+
+/// Computes the number of `u64` words needed to store `n` bits.
+pub const fn words_for_bits(n: usize) -> usize {
+    n.div_ceil(64)
+}
+
+/// Runtime-sized bitset backed by a `Vec<u64>`.
+///
+/// The implementation ensures that unused bits in the last word (if `bit_length`
+/// is not a multiple of 64) are always zero. This invariant is critical for
+/// `PartialEq` correctness, as it relies on slice equality.
+///
+/// All indexing operations panic when `idx >= bit_length`. Use [`iter_set`](Self::iter_set)
+/// to traverse set bits in ascending order.
+///
+/// # Examples
+///
+/// ```
+/// use find_rs_keep_rs::stdx::bitset::DynamicBitSet;
+///
+/// let mut bits = DynamicBitSet::empty(100);
+/// bits.set(1);
+/// bits.set(50);
+/// bits.set(99);
+/// assert_eq!(bits.iter_set().collect::<Vec<_>>(), vec![1, 50, 99]);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DynamicBitSet {
+    words: Vec<u64>,
+    bit_length: usize,
+}
+
+impl DynamicBitSet {
+    /// Creates an empty bitset with capacity for `bit_length` bits, all initialized to zero.
+    ///
+    /// # Arguments
+    ///
+    /// * `bit_length` - The number of addressable bits. May be zero.
+    pub fn empty(bit_length: usize) -> Self {
+        let words = vec![0u64; words_for_bits(bit_length)];
+        Self { words, bit_length }
+    }
+
+    /// Returns the number of addressable bits.
+    #[inline]
+    pub fn bit_length(&self) -> usize {
+        self.bit_length
+    }
+
+    /// Returns the number of backing words.
+    #[inline]
+    pub fn word_len(&self) -> usize {
+        self.words.len()
+    }
+
+    #[inline]
+    fn last_word_mask(&self) -> u64 {
+        let remaining_bits = self.bit_length % 64;
+        if remaining_bits == 0 {
+            u64::MAX
+        } else {
+            (1u64 << remaining_bits) - 1
+        }
+    }
+
+    /// Returns a slice of the backing `u64` words.
+    ///
+    /// Useful for bulk operations or serialization. Padding bits beyond
+    /// `bit_length` are guaranteed to be zero.
+    #[inline]
+    pub fn words(&self) -> &[u64] {
+        &self.words
+    }
+
+    /// Returns a mutable slice of backing words.
+    ///
+    /// # Safety
+    ///
+    /// Callers must ensure that any padding bits in the last word (indices `>= bit_length`)
+    /// remain zero.
+    #[inline]
+    pub unsafe fn words_mut(&mut self) -> &mut [u64] {
+        &mut self.words
+    }
+
+    /// Counts set bits; never exceeds `bit_length`.
+    pub fn count(&self) -> usize {
+        if self.words.is_empty() {
+            return 0;
+        }
+
+        let last = self.words.len() - 1;
+        let mut total = 0usize;
+        for (i, &word) in self.words.iter().enumerate() {
+            let word = if i == last {
+                word & self.last_word_mask()
+            } else {
+                word
+            };
+            total += word.count_ones() as usize;
+        }
+        total
+    }
+
+    /// Returns `true` when no bits are set.
+    pub fn is_empty(&self) -> bool {
+        if self.words.is_empty() {
+            return true;
+        }
+
+        let last = self.words.len() - 1;
+        for (i, &word) in self.words.iter().enumerate() {
+            let word = if i == last {
+                word & self.last_word_mask()
+            } else {
+                word
+            };
+            if word != 0 {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Returns whether `idx` is set.
+    ///
+    /// Panics if `idx >= bit_length`.
+    #[inline]
+    pub fn is_set(&self, idx: usize) -> bool {
+        assert!(idx < self.bit_length, "bit index out of bounds");
+        let word_idx = idx / 64;
+        let bit_idx = idx % 64;
+        (self.words[word_idx] & (1u64 << bit_idx)) != 0
+    }
+
+    /// Sets the bit at `idx`.
+    ///
+    /// Panics if `idx >= bit_length`.
+    #[inline]
+    pub fn set(&mut self, idx: usize) {
+        assert!(idx < self.bit_length, "bit index out of bounds");
+        let word_idx = idx / 64;
+        let bit_idx = idx % 64;
+        self.words[word_idx] |= 1u64 << bit_idx;
+    }
+
+    /// Clears the bit at `idx`.
+    ///
+    /// Panics if `idx >= bit_length`.
+    #[inline]
+    pub fn unset(&mut self, idx: usize) {
+        assert!(idx < self.bit_length, "bit index out of bounds");
+        let word_idx = idx / 64;
+        let bit_idx = idx % 64;
+        self.words[word_idx] &= !(1u64 << bit_idx);
+    }
+
+    /// Sets or clears the bit at `idx` based on `value`.
+    ///
+    /// Panics if `idx >= bit_length`.
+    #[inline]
+    pub fn set_value(&mut self, idx: usize, value: bool) {
+        assert!(idx < self.bit_length, "bit index out of bounds");
+        let word_idx = idx / 64;
+        let bit_idx = idx % 64;
+        let bit_mask = 1u64 << bit_idx;
+
+        // Optimization: Branchless update.
+        // Clear the bit using the inverted mask, then OR in the new value.
+        let val_mask = (value as u64) << bit_idx;
+        self.words[word_idx] = (self.words[word_idx] & !bit_mask) | val_mask;
+    }
+
+    /// Clears all bits.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.words.fill(0);
+    }
+
+    /// Inverts all bits in the bitset.
+    #[inline]
+    pub fn toggle_all(&mut self) {
+        for word in &mut self.words {
+            *word = !*word;
+        }
+
+        // We must clear any bits in the last word that are beyond `bit_length`.
+        // If we don't, `PartialEq` (which checks the full `Vec`) would fail against
+        // a clean bitset, as the padding bits would become 1s after inversion.
+        if !self.words.is_empty() {
+            let last = self.words.len() - 1;
+            let mask = self.last_word_mask();
+            self.words[last] &= mask;
+        }
+    }
+
+    /// Highest set bit, if any.
+    #[inline]
+    pub fn highest_set_bit(&self) -> Option<usize> {
+        if self.words.is_empty() {
+            return None;
+        }
+
+        let last = self.words.len() - 1;
+        let mut word = self.words[last] & self.last_word_mask();
+        if word != 0 {
+            let bit_in_word = 63 - word.leading_zeros() as usize;
+            return Some(last * 64 + bit_in_word);
+        }
+
+        let mut i = last;
+        while i > 0 {
+            i -= 1;
+            word = self.words[i];
+            if word != 0 {
+                let bit_in_word = 63 - word.leading_zeros() as usize;
+                return Some(i * 64 + bit_in_word);
+            }
+        }
+        None
+    }
+
+    /// Returns an iterator over set bit indices in ascending order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use find_rs_keep_rs::stdx::bitset::DynamicBitSet;
+    ///
+    /// let mut bits = DynamicBitSet::empty(64);
+    /// bits.set(5);
+    /// bits.set(10);
+    ///
+    /// for idx in bits.iter_set() {
+    ///     println!("Bit {} is set", idx);
+    /// }
+    /// ```
+    #[inline]
+    pub fn iter_set(&self) -> DynamicBitSetIterator<'_> {
+        DynamicBitSetIterator::new(self)
+    }
+}
+
+/// Iterator over set bit indices in ascending order, produced by [`DynamicBitSet::iter_set`].
+///
+/// Yields each index where the corresponding bit is set, from lowest to highest.
+pub struct DynamicBitSetIterator<'a> {
+    words: &'a [u64],
+    word_idx: usize,
+    current_word: u64,
+    last_word_idx: usize,
+    last_word_mask: u64,
+}
+
+impl<'a> DynamicBitSetIterator<'a> {
+    fn new(bit_set: &'a DynamicBitSet) -> Self {
+        let words = &bit_set.words;
+        let last_word_idx = words.len().saturating_sub(1);
+        let last_word_mask = if words.is_empty() {
+            0
+        } else {
+            bit_set.last_word_mask()
+        };
+        let mut current_word = if words.is_empty() { 0 } else { words[0] };
+        if !words.is_empty() && last_word_idx == 0 {
+            current_word &= last_word_mask;
+        }
+        Self {
+            words,
+            word_idx: 0,
+            current_word,
+            last_word_idx,
+            last_word_mask,
+        }
+    }
+}
+
+impl<'a> Iterator for DynamicBitSetIterator<'a> {
+    type Item = usize;
+
+    #[inline]
+    fn next(&mut self) -> Option<usize> {
+        loop {
+            if self.current_word != 0 {
+                let bit_idx = self.current_word.trailing_zeros() as usize;
+                let idx = self.word_idx * 64 + bit_idx;
+                self.current_word &= self.current_word.wrapping_sub(1);
+                return Some(idx);
+            }
+
+            self.word_idx += 1;
+            if self.word_idx >= self.words.len() {
+                return None;
+            }
+            self.current_word = self.words[self.word_idx];
+            if self.word_idx == self.last_word_idx {
+                self.current_word &= self.last_word_mask;
+            }
+        }
+    }
+}
