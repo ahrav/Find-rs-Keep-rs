@@ -1,3 +1,15 @@
+//! Fixed-capacity ring buffer with stack-allocated storage.
+//!
+//! Design intent:
+//! - Explicit, compile-time capacity so backpressure is deterministic.
+//! - Zero heap allocations in the hot path (storage is `[MaybeUninit<T>; N]`).
+//! - Simple head/len bookkeeping so operations are branch-light and predictable.
+//!
+//! This is designed for single-producer/single-consumer style usage, but the
+//! implementation itself is not synchronized; it relies on single-threaded
+//! access. Insertion past capacity is a logic error unless handled via
+//! [`RingBuffer::push_back`].
+
 use std::mem::MaybeUninit;
 
 // Compile-time proof that u32 -> usize is safe on this platform.
@@ -17,6 +29,18 @@ fn index(i: u32) -> usize {
 /// Values are stored in-place using `MaybeUninit` so no heap allocation is
 /// required. Capacity is a const generic known at compile time; insertion past
 /// capacity is a logic error unless handled via `push_back`.
+///
+/// # Examples
+///
+/// ```
+/// use find_rs_keep_rs::stdx::ring_buffer::RingBuffer;
+///
+/// let mut rb: RingBuffer<i32, 4> = RingBuffer::new();
+/// rb.push_back_assume_capacity(1);
+/// rb.push_back_assume_capacity(2);
+/// assert_eq!(rb.pop_front(), Some(1));
+/// assert_eq!(rb.front(), Some(&2));
+/// ```
 pub struct RingBuffer<T, const N: usize> {
     buf: [MaybeUninit<T>; N],
     head: u32,
