@@ -2,6 +2,9 @@
 //!
 //! Stores bits in `u64` words and guarantees that padding bits (indices beyond the
 //! logical capacity) remain zero.
+//!
+//! Keeping padding bits zero avoids "phantom" set bits when iterating or counting
+//! and makes the bitset safe to serialize or hash without masking.
 
 /// Computes the number of `u64` words needed to store `n` bits.
 pub const fn words_for_bits(n: usize) -> usize {
@@ -81,7 +84,10 @@ impl DynamicBitSet {
     /// # Warning
     ///
     /// Callers must ensure that any padding bits in the last word (indices `>= bit_length`)
-    /// remain zero. Failure to do so may cause `PartialEq` to behave incorrectly.
+    /// remain zero. Failure to do so may cause:
+    /// - `PartialEq` to behave incorrectly
+    /// - `count()` and `is_empty()` to return wrong results
+    /// - Iteration to yield invalid indices
     #[inline]
     pub fn words_mut(&mut self) -> &mut [u64] {
         &mut self.words
