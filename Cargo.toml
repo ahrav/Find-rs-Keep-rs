@@ -9,4 +9,13 @@ edition = "2024"
 stdx-proptest = []
 
 [dev-dependencies]
+criterion = "0.5"
 proptest = "1.4"
+
+[[bench]]
+name = "ring_buffer"
+harness = false
+
+[[bench]]
+name = "bitset"
+harness = false

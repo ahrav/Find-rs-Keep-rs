@@ -3,5 +3,5 @@
 pub mod bitset;
 pub mod ring_buffer;
 
-pub use bitset::{DynamicBitSet, DynamicBitSetIterator, words_for_bits};
+pub use bitset::{BitSet, BitSetIterator, DynamicBitSet, DynamicBitSetIterator, words_for_bits};
 pub use ring_buffer::RingBuffer;
