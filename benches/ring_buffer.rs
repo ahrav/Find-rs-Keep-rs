@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use find_rs_keep_rs::stdx::RingBuffer;
 
 const OPS_PER_ITER: u64 = 10_000;

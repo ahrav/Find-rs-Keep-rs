@@ -702,7 +702,7 @@ impl<'a> Iterator for DynamicBitSetIterator<'a> {
 
 #[cfg(all(test, feature = "stdx-proptest"))]
 mod tests {
-    use super::{words_for_bits, BitSet};
+    use super::{BitSet, words_for_bits};
     use std::collections::HashSet;
 
     use proptest::prelude::*;
